@@ -12,10 +12,15 @@ description: |
 
 parameter_groups:
 
-- label: node info
+- label: Node Info
   parameters:
     - nodeName
     - nodeFlavor
+
+- label: Network Settings
+  parameters:
+    - netRange
+    - netName
 
 parameters:
 
@@ -46,16 +51,43 @@ parameters:
     constraints:
       - custom_constraint: glance.image
 
+  nodeCount:
+    type: number
+    default: 3
+    label: Number of Cluster nodes
+    description: Enter a number between 2 and 10.
+    constraints:
+      - range: { min: 2, max: 10 }
+
+#begin network params
+
+  netName:
+    type: string
+    label: 'Cloud Network Name'
+    description: Name of Cloud Network
+    default: 'cloudNetwork'
+    constraints:
+      - allowed_pattern: '^[\w-]+$'
+        description: "Network name may only have alphanumeric characters, underscores, and dashes"
+
+  netRange:
+    type: string
+    label: 'Enter the first 3 octets of desired network range (such as 192.168.100). /24 network will be created'
+    description: '/24 network will be created'
+    default: '192.168.241'
+    constraints:
+      - allowed_pattern: '^(?:(?:^|\.)(?:2(?:5[0-5]|[0-4]\d)|1?\d?\d)){3}$'
+        description: "please enter a valid 3 octets"
 
 resources:
+
+# begin stack resources
 
   stackSSHKey:
     type: OS::Nova::KeyPair
     properties:
       name: { get_param: "OS::stack_name" }
       save_private_key: true
-
-# begin stack resources
 
   stackPrivateKey:
     type: OS::Heat::CloudConfig
@@ -67,9 +99,47 @@ resources:
           path: /root/.ssh/id_rsa
           permissions:
             '0600'
-
   nodePass:
       type: OS::Heat::RandomString
+
+# begin network resources
+
+  cloudNet:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: [netName] }
+
+  cloudNetSubnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name: { get_param: [netName] }
+      network: { get_attr: [cloudNet, name] }
+      ip_version: 4
+      cidr: { list_join: ['.',  [ { get_param: netRange }, '0/24' ]] }
+      allocation_pools: [{'end': { list_join: ['.',  [ { get_param: netRange }, '254' ]] }, 'start': { list_join: ['.',  [ { get_param: netRange }, '12' ]] } }]
+
+
+  cloudNetPorts:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: nodeCount }
+      resource_def:
+            type: OS::Neutron::Port
+            properties:
+            fixed_ips:
+              str_replace:
+                template: [{'subnet_id': { get_attr: [cloudNetSubnet, name] }, 'ip_address':  { list_join: ['.',  [ { get_param: netRange }, $num ]] } }]
+                params:
+                  $num: '%index%'
+            name:
+              str_replace:
+                template: [{'subnet_id': { get_attr: [cloudNetSubnet, name] }, 'ip_address':  { list_join: ['.',  [ { get_param: netRange }, $num ]] } }]
+                params:
+                  $num: '%index%'
+            network: { get_attr: [cloudNet, name] }
+
+
+# begin node resources
 
   masterNodeConfig:
     type: OS::Heat::MultipartMime
